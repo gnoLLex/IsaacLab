@@ -8,6 +8,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from pprint import pprint
 
 from omni.isaac.lab.app import AppLauncher
 
@@ -37,29 +38,18 @@ from omni.isaac.lab_tasks.utils import parse_env_cfg
 
 
 def main():
-    """Random actions agent with Isaac Lab environment."""
-    # create environment configuration
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    # create environment
     env = gym.make(args_cli.task, cfg=env_cfg)
 
-    # print info (this is vectorized environment)
-    print(f"[INFO]: Gym observation space: {env.observation_space}")
-    print(f"[INFO]: Gym action space: {env.action_space}")
-    # reset environment
-    env.reset()
-    # simulate environment
+    obs, info = env.reset()
+    pprint(obs["policy"].shape)
     while simulation_app.is_running():
-        # run everything in inference mode
         with torch.inference_mode():
-            # sample actions from -1 to 1
             actions = 2 * torch.rand(env.action_space.shape, device=env.unwrapped.device) - 1
-            # apply actions
-            env.step(actions)
+            obs, info = env.step(actions)
 
-    # close the simulator
     env.close()
 
 

@@ -1,0 +1,22 @@
+[package]
+
+# Note: Semantic Versioning is used: https://semver.org/
+version = "0.10.5"
+
+# Description
+title = "Parallel Robot Utils"
+description="torch"
+readme  = "docs/README.md"
+repository = "https://github.com/isaac-sim/IsaacLab"
+category = "robotics"
+keywords = ["robotics"]
+
+[python.pipapi]
+requirements = [ ]
+
+modules = [ ]
+
+use_online_index=true
+
+[[python.module]]
+name = "robot_utils"

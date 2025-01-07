@@ -287,6 +287,7 @@ def main():
                 print("[INFO]: Resetting environment...")
             # step env
             obs, _ = env.step(target_position)
+            print(obs["policy"].shape)
             # print mean squared position error between target and current position
             error = torch.norm(obs["policy"] - target_position).mean().item()
             print(f"[Step: {count:04d}]: Mean position error: {error:.4f}")
