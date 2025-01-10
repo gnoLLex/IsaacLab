@@ -28,6 +28,7 @@ from omni.isaac.lab.scene import InteractiveSceneCfg, InteractiveScene
 from omni.isaac.lab.utils import configclass
 
 from omni.isaac.core.utils.extensions import enable_extension
+
 enable_extension("omni.isaac.motion_generation")
 from omni.isaac.lab.controllers.config.rmp_flow import FRANKA_RMPFLOW_CFG
 from omni.isaac.lab.controllers.rmp_flow import RmpFlowController
@@ -35,7 +36,7 @@ from omni.isaac.lab.controllers.rmp_flow import RmpFlowController
 from omni.isaac.lab_assets import FRANKA_PANDA_CFG, FRANKA_PANDA_HIGH_PD_CFG
 import omni.physics.tensors.impl.api as physx
 
-from enum import Enum
+from enum import Enum, auto
 
 import time, os
 import torch
@@ -43,147 +44,15 @@ import theseus as th
 from torchlie.functional import SE3 as SE3_Func
 from torchkin.forward_kinematics import Robot, get_forward_kinematics_fns
 
-def normalize_quat_in_pos_quat(pos_quat):
-    quaternions = pos_quat[:, 3:]
-    norms = torch.norm(quaternions, dim=1, keepdim=True)
-    pos_quat[:, 3:] = quaternions / norms
-    return pos_quat
-
-# x_y_z_quat
-hardcore_test_ee_poses = normalize_quat_in_pos_quat(torch.tensor(
-    [
-        [0.6, -0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
-        [0.6, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
-        [0.6, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
-        [0.6, 0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
-        [0.6, 0.25, 0.15, 0.7071, 0.7071, 0, 0],
-        [0.6, 0.25, 0.15, -0.7071, 0.7071, 0, 0],
-        [0.6, 0.25, 0.65, 0.009, 0.72, -0.67, -0.014],
-        [0.6, 0.25, 0.65, 0.7071, 0.7071, 0, 0],
-        [0.6, 0.25, 0.65, -0.7071, 0.7071, 0, 0],
-        [0.6, -0.25, 0.65, 0.009, 0.72, -0.67, -0.014],
-        [0.6, -0.25, 0.65, 0.7071, 0.7071, 0, 0],
-        [0.6, -0.25, 0.65, -0.7071, 0.7071, 0, 0],
-        [0.35, -0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
-        [0.35, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
-        [0.35, -0.25, 0.15, -0.7071, 0.7071, 0, 0],
-        [0.35, 0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
-        [0.35, 0.25, 0.15, 0.7071, 0.7071, 0, 0],
-        [0.35, 0.25, 0.15, -0.7071, 0.7071, 0, 0],
-        [0.35, 0.25, 0.45, 0.009, 0.72, -0.67, -0.014],
-        [0.35, 0.25, 0.45, 0.7071, 0.7071, 0, 0],
-        [0.35, 0.25, 0.45, -0.7071, 0.7071, 0, 0],
-        [0.35, -0.25, 0.45, 0.009, 0.72, -0.67, -0.014],
-        [0.35, -0.25, 0.45, 0.7071, 0.7071, 0, 0],
-        [0.35, -0.25, 0.45, -0.7071, 0.7071, 0, 0],
-    ],
-    dtype=torch.float64,
-    device="cuda"
-))
-
-#test_ee_poses = torch.tensor(
-#    [
-#        [0.305, -0.102, 0.548, 0.102, 0.221, 0.462, 0.843],
-#        [0.312, 0.019, 0.536, 0.151, 0.431, 0.276, 0.839],
-#        [0.271, -0.063, 0.491, -0.217, 0.561, 0.145, 0.788],
-#        [0.353, -0.045, 0.516, 0.036, 0.688, 0.293, 0.664],
-#        [0.285, 0.013, 0.470, 0.245, 0.531, -0.319, 0.773],
-#        [0.318, -0.084, 0.502, 0.105, 0.380, 0.532, 0.755],
-#        [0.337, -0.129, 0.474, 0.268, 0.490, -0.377, 0.738],
-#        [0.309, 0.054, 0.515, 0.111, 0.602, 0.309, 0.725],
-#        [0.328, -0.091, 0.462, 0.167, 0.423, 0.563, 0.692],
-#        [0.354, -0.034, 0.528, 0.053, 0.641, 0.427, 0.634],
-#        [0.289, -0.142, 0.455, 0.321, 0.549, 0.366, 0.718],
-#        [0.312, 0.010, 0.503, 0.083, 0.553, 0.275, 0.786],
-#        [0.336, -0.065, 0.472, 0.129, 0.438, 0.541, 0.703],
-#        [0.318, 0.087, 0.483, 0.168, 0.394, 0.426, 0.766],
-#        [0.307, -0.120, 0.492, 0.249, 0.493, 0.281, 0.792],
-#        [0.298, 0.024, 0.537, 0.198, 0.451, 0.279, 0.832],
-#        [0.334, -0.058, 0.502, 0.293, 0.569, 0.312, 0.741],
-#        [0.347, -0.129, 0.470, 0.138, 0.562, 0.419, 0.704],
-#        [0.332, 0.091, 0.494, 0.253, 0.421, 0.536, 0.693],
-#        [0.317, -0.054, 0.502, 0.177, 0.381, 0.465, 0.747],
-#        [0.336, -0.109, 0.475, 0.209, 0.465, 0.389, 0.753],
-#        [0.310, -0.032, 0.539, 0.152, 0.412, 0.412, 0.749],
-#        [0.323, -0.086, 0.510, 0.196, 0.518, 0.401, 0.749],
-#        [0.339, 0.019, 0.469, 0.269, 0.391, 0.283, 0.813]
-#    ],
-#    dtype=torch.float64,
-#    device="cuda"
-#)
-test_ee_poses = normalize_quat_in_pos_quat(torch.tensor(
-    [
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.1, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.2, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.3, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.4, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.5, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.6, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.7, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.8, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.9, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.9, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.8, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.7, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.6, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.5, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.4, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.3, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.2, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.1, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0],
-        [0.3, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0],
-    ],
-    dtype=torch.float64,
-    device="cuda"
-))
+import pinocchio as pin
+import numpy as np
 
 
-test_ee_poses_se3 = th.SE3.x_y_z_unit_quaternion_to_SE3(
-    hardcore_test_ee_poses,
-).tensor
-
-
-def _min_jerk_spaces(
-    N: int, T: float
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    assert N > 1, "Number of planning steps must be larger than 1."
-
-    t_traj = torch.linspace(0, 1, N)
-    p_traj = 10 * t_traj**3 - 15 * t_traj**4 + 6 * t_traj**5
-    pd_traj = (30 * t_traj**2 - 60 * t_traj**3 + 30 * t_traj**4) / T
-    pdd_traj = (60 * t_traj - 180 * t_traj**2 + 120 * t_traj**3) / (T**2)
-
-    return p_traj, pd_traj, pdd_traj
-
-
-def _compute_num_steps(time_to_go: float, hz: float):
-    return int(time_to_go * hz)
-
-
-def generate_joint_space_min_jerk(
-    start: torch.Tensor, goal: torch.Tensor, time_to_go: float, hz: float
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    steps = _compute_num_steps(time_to_go, hz)
-    dt = 1.0 / hz
-
-    p_traj, pd_traj, pdd_traj = _min_jerk_spaces(steps, time_to_go)
-
-    D = goal - start
-    q_traj = start[None, :] + D[None, :] * p_traj[:, None]
-    qd_traj = D[None, :] * pd_traj[:, None]
-    qdd_traj = D[None, :] * pdd_traj[:, None]
-
-    time_from_start = torch.range(0, steps) * dt
-    position = q_traj[:steps, :]
-    velocity = qd_traj[:steps, :]
-    acceleration = qdd_traj[:steps, :]
-
-    return time_from_start, position, velocity, acceleration
+def spherical_distance_quat(quat_1: torch.Tensor, quat_2: torch.Tensor):
+    assert quat_1.shape[-1] == 4, f"quaternion 1 should have 4 components, but has {quat_1.shape[-1]}"
+    assert quat_2.shape[-1] == 4, f"quaternion 2 should have 4 components, but has {quat_2.shape[-1]}"
+    dot = torch.sum(quat_1 * quat_2, dim=-1)
+    return 1 - dot * dot
 
 
 @configclass
@@ -197,57 +66,81 @@ class FrankaSceneCfg(InteractiveSceneCfg):
         prim_path="{ENV_REGEX_NS}/franka"
     )
 
-class IK_Solver(Enum):
-    LevenbergMarquardt = 1
-    Jacobian = 2
+
+class IkSolver(Enum):
+    LEVENBERG_MARQUARDT = auto()
+    JACOBIAN = auto()
+    PINOCCHIO_CPU = auto()
 
 
 class FrankaPanda:
     """
     INFO: all pos_quat are of form: [x, y, z, w, x, y, z]
+    TODO: constraint joints
     """
     _isaac_robot: Articulation
     _theseus_robot: Robot
     _sim: sim_utils.SimulationContext
 
-    def __init__(self, robot, sim: sim_utils.SimulationContext, scene, dtype=torch.float64):
+    def __init__(self, robot, sim: sim_utils.SimulationContext, scene, dtype=torch.float64, verbose=False):
         self._isaac_robot = robot
         self._sim = sim
         self._scene = scene
         self.dtype = dtype
         self.device = self._sim.cfg.device
+        self.sim_dt = self._sim.get_physics_dt()
+        self.verbose = verbose
 
         self.joint_ids, self.joint_names = self._isaac_robot.find_joints("panda_joint.*")
         self.finger_ids, self.finger_names = self._isaac_robot.find_joints("panda_finger_joint.*")
- 
-        print(f"loading theseus from {FRANKA_RMPFLOW_CFG.urdf_file}")
+
+        # Theseus
+        print(FRANKA_RMPFLOW_CFG.urdf_file)
         self._theseus_robot = Robot.from_urdf_file(
             FRANKA_RMPFLOW_CFG.urdf_file, self.dtype, self.device
         )
         self._fk, self._jfk_b, self._jfk_s = get_forward_kinematics_fns(
-            self._theseus_robot, ["panda_hand"]
+            self._theseus_robot, ["panda_end_effector"]
         )
 
-        self._joint_vel_limit = torch.tensor(
-            [2.00, 2.00, 2.00, 2.00, 2.50, 2.50, 2.50],
+        # Pinocchio
+        self.pin_model = pin.buildModelFromUrdf(FRANKA_RMPFLOW_CFG.urdf_file)
+        self.pin_data = self.pin_model.createData()
+        self.pin_end_effector_frame_id = self.pin_model.getFrameId("panda_end_effector", pin.FrameType.FIXED_JOINT)
+
+        # Limits
+        # Hardware Constraints from [Polymetis](https://github.com/intuitive-robots/irl_polymetis/blob/main/polymetis/conf/robot_client/franka_hardware.yaml)
+        # Can be adjusted, but for sim to real these limits are suggested as they are enforced on real hardware
+        self._cartesian_position_lower_limit = torch.tensor(
+            [0.1, -0.4, -0.05],
             dtype=self.dtype,
             device=self.device,
         )
-        self._joint_pos_min = torch.tensor(
+        self._cartesian_position_upper_limit = torch.tensor(
+            [1.0, 0.4, 1.0],
+            dtype=self.dtype,
+            device=self.device,
+        )
+
+        # Physical Limits
+        # https://frankaemika.github.io/docs/control_parameters.html#limits-for-panda
+        self._joint_position_lower_limit = torch.tensor(
             [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973],
             dtype=self.dtype,
             device=self.device,
         )
-        self._joint_pos_max = torch.tensor(
+        self._joint_position_upper_limit = torch.tensor(
             [2.8973, 1.7628, 2.0, -0.0698, 2.8973, 3.7525, 2.8973],
             dtype=self.dtype,
             device=self.device,
         )
+        self._joint_velocity_limit = torch.tensor(
+            [2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61],
+            dtype=self.dtype,
+            device=self.device,
+        )
 
-        self.sim_dt = self._sim.get_physics_dt()
-
-    
-    def initialize(self):
+    def reset(self):
         # reset joint state
         joint_pos = self._isaac_robot.data.default_joint_pos.clone()
         joint_vel = self._isaac_robot.data.default_joint_vel.clone()
@@ -271,23 +164,23 @@ class FrankaPanda:
         return self.forward_kinematics(self.joint_position)
 
     def get_random_theta(self, B=None):
-        if B == None:
+        if B is None:
             B = self._scene.num_envs
         return torch.rand(B, self.dof, dtype=self.dtype)
 
     def get_random_ee_pos_quat(self, B=None):
-        if B == None:
+        if B is None:
             B = self._scene.num_envs
-        
-        positions = torch.empty(B, 3, dtype=self.dtype, device=self.device).uniform_(0.4, 0.6) # x
-        positions[:, 1] = torch.empty(B, dtype=self.dtype, device=self.device).uniform_(-0.1, 0.1) # y
-        positions[:, 2] = torch.empty(B, dtype=self.dtype, device=self.device).uniform_(0.3, 0.7) # z
 
-        quaternions = torch.randn(B, 4, dtype=self.dtype, device=self.device) # (B, [w, x, y, z])
+        positions = torch.empty(B, 3, dtype=self.dtype, device=self.device).uniform_(0.4, 0.6)  # x
+        positions[:, 1] = torch.empty(B, dtype=self.dtype, device=self.device).uniform_(-0.1, 0.1)  # y
+        positions[:, 2] = torch.empty(B, dtype=self.dtype, device=self.device).uniform_(0.3, 0.7)  # z
+
+        quaternions = torch.randn(B, 4, dtype=self.dtype, device=self.device)  # (B, [w, x, y, z])
         quaternions /= torch.norm(quaternions, dim=1, keepdim=True)
-        
+
         pos_quat = torch.cat([positions, quaternions], dim=1)
-        return pos_quat # th.SE3.randn(B, dtype=self.dtype, device=self.device).to_x_y_z_quaternion()
+        return pos_quat  # th.SE3.randn(B, dtype=self.dtype, device=self.device).to_x_y_z_quaternion()
 
     def forward_kinematics(self, theta):
         return th.SE3(tensor=self._fk(theta)[0]).to_x_y_z_quaternion()
@@ -303,9 +196,9 @@ class FrankaPanda:
         return self._jfk_b(theta)[0][0]
 
     def _inverse_kinematics_levenberg_marquardt(
-        self,
-        pos_quat: torch.Tensor,
-        verbose: bool = False,
+            self,
+            pos_quat: torch.Tensor,
+            q: torch.Tensor,
     ) -> torch.Tensor:
         pose = th.SE3.x_y_z_unit_quaternion_to_SE3(pos_quat).tensor
 
@@ -349,22 +242,22 @@ class FrankaPanda:
         )
 
         inputs = {
-            # "theta_opt": torch.zeros_like(theta_opt, dtype=self.dtype, device=self.device),
-            "theta_opt": self.joint_position,
+            "theta_opt": q,
             "targeted_pose": pose,
         }
         optimizer.objective.update(inputs)
-        optimizer.optimize(verbose=False)#verbose)
+        optimizer.optimize(verbose=False)
         theta = optim_vars[0].tensor
 
         return theta
 
     def _inverse_kinematics_jacobian(
-        self,
-        pos_quat: torch.Tensor,
-        verbose: bool = False,
+            self,
+            pos_quat: torch.Tensor,
+            q: torch.Tensor,
     ) -> torch.Tensor:
         step_size = 0.2
+
         def compute_delta_theta(jfk, theta, targeted_pose, use_body_jacobian):
             jac, poses = jfk(theta)
             pose_inv = SE3_Func.inv(poses[-1])
@@ -375,13 +268,12 @@ class FrankaPanda:
                     else SE3_Func.compose(targeted_pose, pose_inv)
                 )
                 .view(-1, 6, 1)
-                .view(-1, 6, 1)
+                .view(-1, 6, 1)  # TODO: ???? randomly appears in theseus example
             )
             return (jac[-1].pinverse() @ error).view(-1, self.dof), error.norm().item()
 
         target_pose = th.SE3.x_y_z_unit_quaternion_to_SE3(pos_quat).tensor
-        # theta_opt = torch.zeros_like(self.joint_position)
-        theta_opt = self.joint_position
+        theta_opt = q
         for _ in range(50):
             delta_theta, error = compute_delta_theta(
                 self._jfk_s, theta_opt, target_pose, False
@@ -389,44 +281,123 @@ class FrankaPanda:
             if error < 1e-4:
                 break
             theta_opt = theta_opt + step_size * delta_theta
-        
+
         return theta_opt
 
+    def _inverse_kinematics_pinocchio_cpu(
+            self,
+            pos_quat: torch.Tensor,
+            q: torch.Tensor,
+    ) -> torch.Tensor:
+        qs = q.cpu().numpy()
+
+        computed_qs = qs.copy()
+
+        for q_i in range(qs.shape[0]):
+            q = qs[q_i]
+            target_pos_quat = pos_quat[q_i]
+
+            eps = 5e-4
+            IT_MAX = 1000
+            DT = 1e-1
+            damp = 1e-12
+
+            oMdes = th.SE3.x_y_z_unit_quaternion_to_SE3(target_pos_quat)
+            rot = oMdes.rotation().tensor.cpu().numpy()[0]
+            pos = oMdes.translation().tensor.cpu().numpy()[0]
+            oMdes = pin.SE3(rot, pos)
+
+            i = 0
+            while True:
+                # Calculate current end-effector position
+                pin.forwardKinematics(self.pin_model, self.pin_data, q)
+                pin.framesForwardKinematics(self.pin_model, self.pin_data, q)
+                pin.updateFramePlacements(self.pin_model, self.pin_data)
+                oMd = self.pin_data.oMf[self.pin_end_effector_frame_id].actInv(oMdes)
+
+                # Calculate error
+                err = pin.log(oMd).vector
+
+                if np.linalg.norm(err) < eps:
+                    success = True
+                    break
+
+                # Check if max iterations reached
+                if i >= IT_MAX:
+                    success = False
+                    break
+
+                # Calculate Jacobian
+                J = pin.computeFrameJacobian(self.pin_model, self.pin_data, q, self.pin_end_effector_frame_id)
+                J = -np.dot(pin.Jlog6(oMd.inverse()), J)
+                H = J.dot(J.T) + damp * np.eye(J.shape[0])
+                g = np.linalg.solve(H, err)
+                v = -DT * J.T.dot(g)
+                q = pin.integrate(self.pin_model, q, v)
+
+                q = np.clip(q, self.pin_model.lowerPositionLimit, self.pin_model.upperPositionLimit)
+
+                i += 1
+
+            computed_qs[q_i] = q
+
+        return torch.tensor(computed_qs, dtype=self.dtype, device=self.device)
+
     def inverse_kinematics(
-        self,
-        pos_quat: torch.Tensor,
-        rtol: float = 1e-5,
-        atol: float = 1e-8,
-        verbose: bool = False,
-        ik_solver: IK_Solver = IK_Solver.LevenbergMarquardt,
+            self,
+            pos_quat: torch.Tensor,
+            rtol: float = 0.0,
+            atol: float = 1e-4,
+            ik_solver: IkSolver = IkSolver.LEVENBERG_MARQUARDT,
+            q=None
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if pos_quat.ndim == 1:
             pos_quat.unsqueeze(-1)
 
+        if q is None:
+            q = self.joint_position
+
         ik_solver_fn = None
 
-        if ik_solver == IK_Solver.LevenbergMarquardt:
+        if ik_solver == IkSolver.LEVENBERG_MARQUARDT:
             ik_solver_fn = self._inverse_kinematics_levenberg_marquardt
-        elif ik_solver == IK_Solver.Jacobian:
+        elif ik_solver == IkSolver.JACOBIAN:
             ik_solver_fn = self._inverse_kinematics_jacobian
-
+        elif ik_solver == IkSolver.PINOCCHIO_CPU:
+            ik_solver_fn = self._inverse_kinematics_pinocchio_cpu
+        else:
+            print("### Unknown IK Solver")
 
         start = time.time()
-        computed_q = ik_solver_fn(pos_quat, verbose)
-        if verbose:
+        computed_q = ik_solver_fn(pos_quat, q)
+        if self.verbose:
             ms_elapsed = (time.time() - start) * 1000
             print(f"Franka IK: {ik_solver} took {ms_elapsed:04} ms")
+            print()
 
         computed_pos_quat = self.forward_kinematics(computed_q)
+        positional_difference = computed_pos_quat[:, :3] - pos_quat[:, :3]
+        rotational_difference = spherical_distance_quat(computed_pos_quat[:, 3:], pos_quat[:, 3:])
 
-        #print(f"IK difference: {computed_pos_quat - pos_quat}")
+        print(f"Mean err pos: {positional_difference.abs().mean():04f}, rot: {rotational_difference.abs().mean():04f}")
 
         is_close = torch.isclose(computed_pos_quat, pos_quat, rtol=rtol, atol=atol)
         success = torch.all(is_close, dim=-1)
 
         return computed_q, success
 
-    def goto_joint_position(self, joint_position, max_steps=200, verbose=True):
+    def is_within_joint_position_limits(self, joint_position):
+        joint_position = joint_position[:, :7]
+        joint_within_limits = (joint_position >= self._joint_position_lower_limit) & (
+                    joint_position <= self._joint_position_upper_limit)
+
+        all_within_limits = joint_within_limits.all(dim=-1)
+
+        return all_within_limits
+
+    def goto_joint_position(self, joint_position, max_steps=200):
+        if not self.is_within_joint_position_limits(joint_position):
+            print("Trying to goto out of limits joint position")
         self._isaac_robot.set_joint_position_target(joint_position)
         self._isaac_robot.set_joint_velocity_target(torch.zeros_like(joint_position))
 
@@ -437,23 +408,39 @@ class FrankaPanda:
             self._scene.write_data_to_sim()
             self._sim.step()
             self._scene.update(self.sim_dt)
-        
+
         return False
-        
 
-    def goto_ee_pos_quat(self, pos_quat, max_steps=200, verbose=False):
-        target_q, s = self.inverse_kinematics(pos_quat, ik_solver=IK_Solver.LevenbergMarquardt, verbose=verbose)
-        self._isaac_robot.set_joint_position_target(target_q)
+    def set_joint_position(self, joint_position):
+        if not torch.any(self.is_within_joint_position_limits(joint_position)):
+            print("Trying to set out of limits joint position")
+        joint_velocity = torch.zeros_like(joint_position)
+        self._isaac_robot.write_joint_state_to_sim(joint_position, joint_velocity)
+        self._isaac_robot.set_joint_position_target(joint_position)
+        self._isaac_robot.write_data_to_sim()
+        self.let_run(steps=1)
 
-        for i in range(max_steps):
-            all_close = torch.allclose(pos_quat, self.ee_pos_quat)
-            if all_close:
-                return True
-            self._scene.write_data_to_sim()
-            self._sim.step()
-            self._scene.update(self.sim_dt)
+    def is_within_cartesian_limits(self, pos_quat):
+        cartesian_position = pos_quat[:, :3]
+        coordinate_within_limits = (cartesian_position >= self._cartesian_position_lower_limit) & (
+                cartesian_position <= self._cartesian_position_upper_limit)
+
+        all_within_limits = coordinate_within_limits.all(dim=-1)
+
+        return all_within_limits
+
+
+    def goto_ee_pos_quat(self, pos_quat, max_steps=200, ik_solver=IkSolver.LEVENBERG_MARQUARDT):
+        if not self.is_within_cartesian_limits(pos_quat):
+            print("Desired end effector position is out of limits")
+        target_q, s = self.inverse_kinematics(pos_quat, ik_solver=ik_solver)
+        self.goto_joint_position(target_q)
         return s
-    
+
+    def set_ee_pos_quat(self, pos_quat, ik_solver=IkSolver.LEVENBERG_MARQUARDT):
+        target_q, s = self.inverse_kinematics(pos_quat, ik_solver=ik_solver)
+        self.set_joint_position(target_q)
+
     def open_gripper(self):
         self._isaac_robot.set_joint_effort_target(4, joint_ids=self.finger_ids)
         self._scene.write_data_to_sim()
@@ -461,7 +448,7 @@ class FrankaPanda:
     def close_gripper(self):
         self._isaac_robot.set_joint_effort_target(-20, joint_ids=self.finger_ids)
         self._scene.write_data_to_sim()
-    
+
     def let_run(self, steps=100):
         for i in range(steps):
             current_joint_pos = self._isaac_robot.data.joint_pos.clone()
@@ -473,32 +460,126 @@ class FrankaPanda:
             self._scene.update(self.sim_dt)
 
 
+def normalize_quat_in_pos_quat(pos_quat):
+    quaternions = pos_quat[:, 3:]
+    norms = torch.norm(quaternions, dim=1, keepdim=True)
+    pos_quat[:, 3:] = quaternions / norms
+    return pos_quat
+
+
+# x_y_z_quat
+hardcore_test_ee_poses = normalize_quat_in_pos_quat(torch.tensor(
+    [
+        [0.6, -0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
+        [0.6, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
+        [0.6, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
+        [0.6, 0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
+        [0.6, 0.25, 0.15, 0.7071, 0.7071, 0, 0],
+        [0.6, 0.25, 0.15, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.6, 0.25, 0.65, 0.009, 0.72, -0.67, -0.014],
+        [0.6, 0.25, 0.65, 0.7071, 0.7071, 0, 0],
+        [0.6, 0.25, 0.65, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.6, -0.25, 0.65, 0.009, 0.72, -0.67, -0.014],
+        [0.6, -0.25, 0.65, 0.7071, 0.7071, 0, 0],
+        [0.6, -0.25, 0.65, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.35, -0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
+        [0.35, -0.25, 0.15, 0.7071, 0.7071, 0, 0],
+        [0.35, -0.25, 0.15, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.35, 0.25, 0.15, 0.009, 0.72, -0.67, -0.014],
+        [0.35, 0.25, 0.15, 0.7071, 0.7071, 0, 0],
+        [0.35, 0.25, 0.15, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.35, 0.25, 0.45, 0.009, 0.72, -0.67, -0.014],
+        [0.35, 0.25, 0.45, 0.7071, 0.7071, 0, 0],
+        [0.35, 0.25, 0.45, -0.7071, 0.7071, 0, 0],  # is this possible?
+        [0.35, -0.25, 0.45, 0.009, 0.72, -0.67, -0.014],
+        [0.35, -0.25, 0.45, 0.7071, 0.7071, 0, 0],
+        [0.35, -0.25, 0.45, -0.7071, 0.7071, 0, 0],  # is this possible?
+    ],
+    dtype=torch.float64,
+    device="cuda"
+))
+
+test_ee_poses = normalize_quat_in_pos_quat(torch.tensor(
+    [
+        [0.3, -0.6, 0.5, 0.0, 1.0, 0.0, 0.0],
+        [0.3, -0.5, 0.5, 0.0, 1.0, 0.1, 0.0],
+        [0.3, -0.4, 0.5, 0.0, 1.0, 0.2, 0.0],
+        [0.3, -0.3, 0.5, 0.0, 1.0, 0.3, 0.0],
+        [0.3, -0.2, 0.5, 0.0, 1.0, 0.4, 0.0],
+        [0.3, -0.2, 0.5, 0.0, 1.0, 0.5, 0.0],
+        [0.3, -0.1, 0.5, 0.0, 1.0, 0.6, 0.0],
+        [0.3, -0.0, 0.5, 0.0, 1.0, 0.7, 0.0],
+        [0.3, -0.1, 0.5, 0.0, 1.0, 0.8, 0.0],
+        [0.3, -0.2, 0.5, 0.0, 1.0, 0.9, 0.0],
+        [0.3, -0.3, 0.5, 0.0, 1.0, 1.0, 0.0],
+        [0.3, -0.4, 0.5, 0.0, 0.9, 1.0, 0.0],
+        [0.3, 0.1, 0.5, 0.0, 0.8, 1.0, 0.0],
+        [0.3, 0.2, 0.5, 0.0, 0.7, 1.0, 0.0],
+        [0.3, 0.3, 0.5, 0.0, 0.6, 1.0, 0.0],
+        [0.3, 0.4, 0.5, 0.0, 0.5, 1.0, 0.0],
+        [0.3, 0.5, 0.5, 0.0, 0.4, 1.0, 0.0],
+        [0.3, 0.6, 0.5, 0.0, 0.3, 1.0, 0.0],
+        [0.3, 0.0, 0.5, 0.0, 0.2, 1.0, 0.0],
+        [0.3, 0.0, 0.5, 0.0, 0.1, 1.0, 0.0],
+        [0.3, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0],
+        [0.3, 0.0, 0.5, 0.0, -1.0, 0.0, 0.0],
+        [0.3, 0.0, 0.5, 0.0, -1.0, -1.0, -1.0],
+        [0.3, 0.0, 0.5, 0.0, 1.0, 0.0, 0.0],
+    ],
+    dtype=torch.float64,
+    device="cuda"
+))
+
+
+def resolve_ik_solver(name: str):
+    default_name = "cpu"
+    ik_solver_name_map = {
+        "cpu": IkSolver.PINOCCHIO_CPU,
+        "gpu": IkSolver.LEVENBERG_MARQUARDT,
+    }
+
+    if name not in ik_solver_name_map.keys():
+        print(
+            f'Unknown IK Solver of name: {name}. Available solvers: {ik_solver_name_map.keys()} Defaulting to "{default_name}".')
+        return ik_solver_name_map[default_name]
+
+    return ik_solver_name_map[name]
+
+
 def main():
+    iks = resolve_ik_solver("cpu")
+
     """Main function."""
     # Initialize the simulation context
     sim_cfg = sim_utils.SimulationCfg()
     sim = sim_utils.SimulationContext(sim_cfg)
     # Set main camera
-    sim.set_camera_view((3.0, 0.0, 1), (0.0, 0.0, 0.0))
+    sim.set_camera_view((3.0, 0.25, 0.15), (-1.0, 0.0, 0.0))
 
     scene = InteractiveScene(
         cfg=FrankaSceneCfg(num_envs=args_cli.num_envs, env_spacing=2.0)
     )
     sim.reset()
 
-    robot = FrankaPanda(scene["franka"], sim, scene)
-    robot.initialize()
+    robot = FrankaPanda(scene["franka"], sim, scene, verbose=False)
+    robot.reset()
 
-    for r in range(10):
-        #print(robot.goto_ee_pos_quat(robot.get_random_ee_pos_quat(), max_steps=200, verbose=True))
-        #print(robot.goto_ee_pos_quat(test_ee_poses, max_steps=200, verbose=True))
-        if r % 2 == 0:
-            robot.goto_ee_pos_quat(test_ee_poses[20].unsqueeze(0).repeat(scene.num_envs, 1), max_steps=200, verbose=True)
-        else:
-            robot.goto_ee_pos_quat(test_ee_poses[0].unsqueeze(0).repeat(scene.num_envs, 1), max_steps=200, verbose=True)
+    pose = normalize_quat_in_pos_quat(torch.tensor(
+        [
+            [0.6, 0.25, 0.15, 0, 1, 0, 0],
+            [0.6, 0.25, 0.15, -0.7071, -0.7071, 0, 0],
+            [0.6, 0.25, 0.15, -0.7071, 0.7071, 0, 0],
+        ],
+        dtype=torch.float64,
+        device="cuda"
+    ))
+
+    # robot.set_ee_pos_quat(pose, ik_solver=iks)
+
+    for pose in hardcore_test_ee_poses:
+        robot.set_ee_pos_quat(pose.unsqueeze(0).repeat(scene.num_envs, 1), ik_solver=iks)
+
     robot.close_gripper()
-    #robot.goto_pos_vel(pose.unsqueeze(0).repeat(scene.num_envs, 1))
-    print("### LOOOPING ###")
     while True:
         robot.let_run()
 
